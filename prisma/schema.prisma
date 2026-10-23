@@ -1,0 +1,254 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum SubscriptionTier {
+  FREE
+  STARTER
+  PRO
+}
+
+enum SocialPlatform {
+  YOUTUBE
+  INSTAGRAM
+  LINKEDIN
+}
+
+enum ProjectStatus {
+  DRAFT
+  SCRIPTING
+  GENERATING_ASSETS
+  GENERATING_AUDIO
+  RENDERING
+  COMPLETED
+  FAILED
+}
+
+enum ScheduledPostStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+enum GenerationJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum CreditTransactionType {
+  RESERVE
+  CHARGE
+  REFUND
+  GRANT
+  ADJUSTMENT
+}
+
+model User {
+  id                   String           @id @default(cuid())
+  email                String           @unique
+  emailVerified        DateTime?
+  name                 String?
+  passwordHash         String?
+  image                String?
+  subscriptionTier     SubscriptionTier @default(FREE)
+  monthlyVideoCredits  Int              @default(3)
+  creditsUsed          Int              @default(0)
+  stripeCustomerId     String?          @unique
+  stripeSubscriptionId String?          @unique
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  accounts          Account[]
+  sessions          Session[]
+  socialAccounts    SocialAccount[]
+  videoProjects     VideoProject[]
+  generationJobs    GenerationJob[]
+  creditTransactions CreditTransaction[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model SocialAccount {
+  id                    String         @id @default(cuid())
+  userId                String
+  platform              SocialPlatform
+  platformAccountId     String
+  accountName           String
+  encryptedAccessToken  String         @db.Text
+  encryptedRefreshToken String?        @db.Text
+  expiresAt             DateTime?
+  scopes                String?
+  metadata              Json?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduledPosts ScheduledPost[]
+
+  @@unique([userId, platform, platformAccountId])
+  @@index([userId])
+}
+
+model VideoProject {
+  id              String        @id @default(cuid())
+  userId          String
+  title           String        @default("Untitled video")
+  prompt          String        @db.Text
+  inputType       String        @default("idea")
+  language        String        @default("en")
+  aspectRatio     String        @default("9:16")
+  targetDuration  Int           @default(50)
+  tone            String?
+  visualStyle     String?
+  voiceId         String?
+  status          ProjectStatus @default(DRAFT)
+  scriptManifest  Json?
+  audioUrl        String?
+  renderedVideoUrl String?
+  thumbnailUrl    String?
+  actualDuration  Float?
+  errorMessage    String?       @db.Text
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scenes         Scene[]
+  scheduledPosts ScheduledPost[]
+  generationJobs GenerationJob[]
+  creditTransactions CreditTransaction[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status])
+}
+
+model Scene {
+  id              String   @id @default(cuid())
+  projectId       String
+  order           Int
+  sceneKey        String
+  scriptSnippet   String   @db.Text
+  visualKeywords  String[]
+  overlayText     String?
+  transition      String   @default("cut")
+  startTime       Float?
+  endTime         Float?
+  estimatedDuration Float?
+  audioUrl        String?
+  visualAssetUrl  String?
+  visualMetadata  Json?
+  subtitleData    Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, sceneKey])
+  @@unique([projectId, order])
+  @@index([projectId])
+}
+
+model ScheduledPost {
+  id              String              @id @default(cuid())
+  projectId       String
+  socialAccountId String
+  scheduledAt     DateTime
+  status          ScheduledPostStatus @default(PENDING)
+  externalPostId  String?
+  publishedAt     DateTime?
+  errorMessage    String?             @db.Text
+  retryCount      Int                 @default(0)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  project       VideoProject  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@index([scheduledAt, status])
+  @@index([projectId])
+}
+
+model GenerationJob {
+  id           String              @id @default(cuid())
+  userId       String
+  projectId    String
+  jobType      String
+  status       GenerationJobStatus   @default(QUEUED)
+  progress     Int                 @default(0)
+  currentStep  String?
+  errorMessage String?             @db.Text
+  idempotencyKey String?           @unique
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([projectId])
+  @@index([status])
+}
+
+model CreditTransaction {
+  id              String                @id @default(cuid())
+  userId          String
+  projectId       String?
+  amount          Int
+  transactionType CreditTransactionType
+  idempotencyKey  String                @unique
+  description     String?
+  createdAt       DateTime              @default(now())
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project VideoProject? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc)])
+}
